@@ -28,20 +28,20 @@ const OTCalculator = () => {
     return () => clearInterval(interval);
   }, []);
 
-  const loadEntries = () => {
+  const loadEntries = async () => {
     try {
-      const stored = localStorage.getItem('ot-entries');
-      if (stored) {
-        setEntries(JSON.parse(stored));
+      const result = await window.storage.get('ot-entries');
+      if (result && result.value) {
+        setEntries(JSON.parse(result.value));
       }
     } catch (error) {
       console.log('No saved entries found');
     }
   };
 
-  const saveEntries = (newEntries) => {
+  const saveEntries = async (newEntries) => {
     try {
-      localStorage.setItem('ot-entries', JSON.stringify(newEntries));
+      await window.storage.set('ot-entries', JSON.stringify(newEntries));
     } catch (error) {
       console.error('Error saving entries:', error);
     }
@@ -146,21 +146,30 @@ const OTCalculator = () => {
     }
 
     const actualOTMinutes = totalMinutes - otStartMinutes;
-    const otHours = Math.floor(actualOTMinutes / 60);
-    const otMinutes = actualOTMinutes % 60;
     
-    const roundedOTHours = otMinutes > 0 ? otHours + (otMinutes / 60) : otHours;
+    // MINIMUM 1 HOUR RULE: If less than 60 minutes, no OT can be claimed
+    if (actualOTMinutes < 60) {
+      return {
+        type: 'No OT',
+        hours: 0,
+        totalPay: 0,
+        breakdown: 'Less than 1 hour OT (minimum required)'
+      };
+    }
     
-    const mealAllowance = roundedOTHours >= 1 ? 13 : 0;
-    const otPay = roundedOTHours * 13;
+    // Calculate exact OT hours in decimal (e.g., 1.5 hours, 2.3 hours)
+    const exactOTHours = actualOTMinutes / 60;
+    
+    const mealAllowance = 13; // Always RM13 since minimum is 1 hour
+    const otPay = exactOTHours * 13;
     
     return {
       type: 'Weekday',
-      hours: roundedOTHours,
+      hours: exactOTHours,
       mealAllowance: mealAllowance,
       otPay: otPay,
       totalPay: otPay + mealAllowance,
-      breakdown: `${roundedOTHours.toFixed(2)}h × RM13`
+      breakdown: `${exactOTHours.toFixed(2)}h × RM13 + RM13 meal`
     };
   };
 
@@ -193,13 +202,13 @@ const OTCalculator = () => {
     saveEntries(newEntries);
   };
 
-  const clearAllEntries = () => {
+  const clearAllEntries = async () => {
     const confirmed = window.confirm(`Clear all ${entries.length} entries?\n\nThis cannot be undone!`);
     
     if (confirmed) {
       setEntries([]);
       try {
-        localStorage.removeItem('ot-entries');
+        await window.storage.delete('ot-entries');
         alert('All entries cleared.');
       } catch (error) {
         console.error('Error clearing entries:', error);
@@ -325,19 +334,38 @@ const OTCalculator = () => {
   };
 
   const getMonthlyTotal = () => {
-    const filtered = entries.filter(e => e.date.startsWith(selectedMonth));
+    // Payslip period: 29th of LAST month to 28th of CURRENT/SELECTED month
+    const [year, month] = selectedMonth.split('-').map(Number);
+    
+    // Start date: 29th of LAST month (month - 1)
+    let startYear = year;
+    let startMonth = month - 1;
+    if (startMonth === 0) {
+      startMonth = 12;
+      startYear = year - 1;
+    }
+    const startDateStr = `${startYear}-${String(startMonth).padStart(2, '0')}-29`;
+    
+    // End date: 28th of SELECTED month (THIS month)
+    const endDateStr = `${year}-${String(month).padStart(2, '0')}-28`;
+    
+    const filtered = entries.filter(e => e.date >= startDateStr && e.date <= endDateStr);
     const totalPay = filtered.reduce((sum, e) => sum + (e.result?.totalPay || 0), 0);
     const totalHours = filtered.reduce((sum, e) => sum + (e.result?.hours || 0), 0);
     const cappedPay = Math.min(totalPay, 1200);
     
-    return { totalPay, cappedPay, totalHours, count: filtered.length };
+    return { totalPay, cappedPay, totalHours, count: filtered.length, startDate: startDateStr, endDate: endDateStr };
   };
 
   const monthlyTotal = getMonthlyTotal();
   const currentResult = calculateOT(currentEntry);
 
   const exportData = () => {
-    const filtered = entries.filter(e => e.date.startsWith(selectedMonth));
+    const [year, month] = selectedMonth.split('-').map(Number);
+    const startDate = new Date(year, month - 2, 29).toISOString().split('T')[0];
+    const endDate = new Date(year, month - 1, 28).toISOString().split('T')[0];
+    
+    const filtered = entries.filter(e => e.date >= startDate && e.date <= endDate);
     const csv = [
       ['Date','Day','Clock In','Clock Out','Type','Hours','Pay'].join(','),
       ...filtered.map(e => [
@@ -355,7 +383,7 @@ const OTCalculator = () => {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `Report-${selectedMonth}.csv`;
+    a.download = `Payslip-Period-${selectedMonth}.csv`;
     a.click();
   };
 
@@ -367,7 +395,7 @@ const OTCalculator = () => {
     clockInTime.setHours(hour, min, 0, 0);
 
     const finishTime = new Date(clockInTime);
-    finishTime.setMinutes(finishTime.getMinutes() + 510);
+    finishTime.setMinutes(finishTime.getMinutes() + 510); // 8.5 hours = 510 minutes
 
     const now = currentTime;
     const diff = finishTime - now;
@@ -404,6 +432,7 @@ const OTCalculator = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-100 to-gray-200 p-6">
       <div className="max-w-7xl mx-auto">
+        {/* Header */}
         <div className="bg-white rounded-3xl shadow-[8px_8px_16px_#bebebe,-8px_-8px_16px_#ffffff] p-8 mb-6">
           <div className="flex items-center justify-between flex-wrap gap-4">
             <div className="flex items-center gap-4">
@@ -426,6 +455,7 @@ const OTCalculator = () => {
         </div>
 
         <div className="grid lg:grid-cols-2 gap-6 mb-6">
+          {/* Timer Widget */}
           <div className="bg-white rounded-3xl shadow-[8px_8px_16px_#bebebe,-8px_-8px_16px_#ffffff] p-6">
             <h2 className="text-xl font-bold text-gray-800 mb-5 flex items-center gap-2">
               <Clock className="w-5 h-5 text-indigo-500" />
@@ -500,6 +530,7 @@ const OTCalculator = () => {
             </div>
           </div>
 
+          {/* Input Section */}
           <div className="bg-white rounded-3xl shadow-[8px_8px_16px_#bebebe,-8px_-8px_16px_#ffffff] p-6">
             <h2 className="text-xl font-bold text-gray-800 mb-5 flex items-center gap-2">
               <Clock className="w-5 h-5 text-blue-500" />
@@ -609,21 +640,27 @@ const OTCalculator = () => {
             </div>
           </div>
 
+          {/* Summary */}
           <div className="bg-white rounded-3xl shadow-[8px_8px_16px_#bebebe,-8px_-8px_16px_#ffffff] p-6 lg:col-span-2">
             <div className="flex items-center justify-between mb-5 flex-wrap gap-3">
               <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
                 <DollarSign className="w-5 h-5 text-green-500" />
-                Summary
+                Payslip Summary
               </h2>
-              <input
-                type="month"
-                value={selectedMonth}
-                onChange={(e) => setSelectedMonth(e.target.value)}
-                className="px-4 py-2 bg-gray-100 rounded-2xl shadow-[inset_2px_2px_4px_#bebebe,inset_-2px_-2px_4px_#ffffff] text-sm text-gray-800 focus:outline-none"
-              />
+              <div className="text-right">
+                <input
+                  type="month"
+                  value={selectedMonth}
+                  onChange={(e) => setSelectedMonth(e.target.value)}
+                  className="px-4 py-2 bg-gray-100 rounded-2xl shadow-[inset_2px_2px_4px_#bebebe,inset_-2px_-2px_4px_#ffffff] text-sm text-gray-800 focus:outline-none"
+                />
+                <p className="text-xs text-gray-500 mt-1">
+                  Period: {monthlyTotal.startDate} to {monthlyTotal.endDate}
+                </p>
+              </div>
             </div>
 
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-5">
+            <div className="grid grid-cols-2 gap-4 mb-5">
               <div className="p-4 bg-gray-100 rounded-2xl shadow-[inset_3px_3px_6px_#bebebe,inset_-3px_-3px_6px_#ffffff]">
                 <p className="text-xs text-gray-500 font-semibold mb-1">Hours</p>
                 <p className="text-2xl font-bold text-gray-800">{monthlyTotal.totalHours.toFixed(1)}</p>
@@ -663,10 +700,11 @@ const OTCalculator = () => {
           </div>
         </div>
 
+        {/* Entries Table */}
         <div className="bg-white rounded-3xl shadow-[8px_8px_16px_#bebebe,-8px_-8px_16px_#ffffff] p-6">
           <h2 className="text-xl font-bold text-gray-800 mb-4 flex items-center gap-2">
             <Calendar className="w-5 h-5 text-purple-500" />
-            {new Date(selectedMonth + '-01').toLocaleDateString('en-US', { month: 'long', year: 'numeric' })}
+            Payslip Period: {monthlyTotal.startDate} to {monthlyTotal.endDate}
           </h2>
 
           <div className="overflow-x-auto">
@@ -683,7 +721,7 @@ const OTCalculator = () => {
               </thead>
               <tbody>
                 {entries
-                  .filter(e => e.date.startsWith(selectedMonth))
+                  .filter(e => e.date >= monthlyTotal.startDate && e.date <= monthlyTotal.endDate)
                   .sort((a, b) => new Date(b.date) - new Date(a.date))
                   .map(entry => (
                     <tr key={entry.id} className="border-b border-gray-100 hover:bg-gray-50">
@@ -720,14 +758,15 @@ const OTCalculator = () => {
                   ))}
               </tbody>
             </table>
-            {entries.filter(e => e.date.startsWith(selectedMonth)).length === 0 && (
+            {entries.filter(e => e.date >= monthlyTotal.startDate && e.date <= monthlyTotal.endDate).length === 0 && (
               <div className="text-center py-12 text-gray-500">
-                No entries for this month
+                No entries for this payslip period
               </div>
             )}
           </div>
         </div>
 
+        {/* Import Modal */}
         {showImportModal && (
           <div className="fixed inset-0 bg-black bg-opacity-40 z-50 overflow-y-auto">
             <div className="min-h-screen flex items-center justify-center p-4">
