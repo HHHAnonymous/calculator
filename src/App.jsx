@@ -292,7 +292,9 @@ const OTCalculator = () => {
       setTimeout(() => {
         const times = [];
         document.querySelectorAll('.right-content span[data-v-04959c39]').forEach(span => {
-          if (/^\\d{1,2}:\\d{2}$/.test(span.textContent.trim())) times.push(span.textContent.trim());
+          const text = span.textContent.trim();
+          const timeMatch = text.match(/^(\d{1,2}:\d{2})/);
+          if (timeMatch) times.push(timeMatch[1]);
         });
         resolve(times);
       }, 600);
