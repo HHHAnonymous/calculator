@@ -293,13 +293,13 @@ const OTCalculator = () => {
         const times = [];
         document.querySelectorAll('.right-content span[data-v-04959c39]').forEach(span => {
           const text = span.textContent.trim();
-          const timeMatch = text.match(/^(\d{1,2}:\d{2})/);
+          const timeMatch = text.match(/^(\\d{1,2}:\\d{2})/);
           if (timeMatch) times.push(timeMatch[1]);
         });
         resolve(times);
       }, 600);
     });
-  }
+  } 
   async function process() {
     for (const cell of daysWithAttendance) {
       const dayMatch = cell.textContent.trim().match(/^\\d{1,2}/);
